@@ -272,23 +272,22 @@ func (s *Server) setCacheAccessToken(value string, expiresIn int, baseURL string
 	cache.ExpiresIn = (int(time.Now().Unix()) + expiresIn) - int(math.Floor(float64(expiresIn)*0.9))
 
 	data, _ := json.Marshal(cache)
-	os.Setenv("SS_AT_"+url.QueryEscape(baseURL), string(data))
+	os.Setenv(s.cacheKey(baseURL), string(data))
 	return nil
 }
 
 func (s *Server) getCacheAccessToken(baseURL string) (string, bool) {
-	data, ok := os.LookupEnv("SS_AT_" + url.QueryEscape(baseURL))
-	if !ok {
-		s.clearTokenCache()
-		return "", ok
+	// Try the new per-username key first
+	data, ok := os.LookupEnv(s.cacheKey(baseURL))
+	if ok && data != "" {
+		cache := TokenCache{}
+		if err := json.Unmarshal([]byte(data), &cache); err == nil {
+			if time.Now().Unix() < int64(cache.ExpiresIn) {
+				return cache.AccessToken, true
+			}
+		}
 	}
-	cache := TokenCache{}
-	if err := json.Unmarshal([]byte(data), &cache); err != nil {
-		return "", false
-	}
-	if time.Now().Unix() < int64(cache.ExpiresIn) {
-		return cache.AccessToken, true
-	}
+	s.clearTokenCache()
 	return "", false
 }
 
@@ -301,7 +300,23 @@ func (s *Server) clearTokenCache() {
 		baseURL = s.ServerURL
 	}
 
-	os.Setenv("SS_AT_"+url.QueryEscape(baseURL), "")
+	// Clear the new per-username cache key
+	os.Setenv(s.cacheKey(baseURL), "")
+
+	// Also clear the legacy cache key to avoid leftover stale tokens
+	legacyKey := "SS_AT_" + url.QueryEscape(baseURL)
+	os.Setenv(legacyKey, "")
+}
+
+// cacheKey returns an environment variable key unique to the base URL and
+// credentials (username). This prevents token collisions when multiple Server
+// instances use the same ServerURL but different credentials.
+func (s *Server) cacheKey(baseURL string) string {
+	key := "SS_AT_" + url.QueryEscape(baseURL)
+	if s.Credentials.Username != "" {
+		key = key + "_" + url.QueryEscape(s.Credentials.Username)
+	}
+	return key
 }
 
 // getAccessToken gets an OAuth2 Access Grant and returns the token
