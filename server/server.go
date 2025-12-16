@@ -287,21 +287,6 @@ func (s *Server) getCacheAccessToken(baseURL string) (string, bool) {
 			}
 		}
 	}
-
-	// Fallback to legacy key format (without username)
-	legacyKey := "SS_AT_" + url.QueryEscape(baseURL)
-	legacyData, legacyOk := os.LookupEnv(legacyKey)
-	if legacyOk && legacyData != "" {
-		legacyCache := TokenCache{}
-		if err := json.Unmarshal([]byte(legacyData), &legacyCache); err == nil {
-			if time.Now().Unix() < int64(legacyCache.ExpiresIn) {
-				// Legacy token is valid, migrate it to the new per-username key
-				s.setCacheAccessToken(legacyCache.AccessToken, legacyCache.ExpiresIn-int(time.Now().Unix()), baseURL)
-				return legacyCache.AccessToken, true
-			}
-		}
-	}
-
 	s.clearTokenCache()
 	return "", false
 }
