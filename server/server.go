@@ -387,7 +387,7 @@ func (s *Server) checkPlatformDetails(baseURL string) (string, error) {
 	ssHealthCheckUrl := fmt.Sprintf("%s/%s", strings.Trim(baseURL, "/"), "api/v1/healthcheck")
 
 	isHealthy, err := checkJSONResponse(ssHealthCheckUrl)
-	if err != nil {
+	if err != nil && !strings.Contains(err.Error(), "unexpected response from server") {
 		return "", fmt.Errorf("[ERROR] checking server health check url: %v", err)
 	}
 
