@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math"
 	"mime/multipart"
@@ -387,107 +386,119 @@ func (s *Server) checkPlatformDetails(baseURL string) (string, error) {
 	platformHelthCheckUrl := fmt.Sprintf("%s/%s", strings.Trim(baseURL, "/"), "health")
 	ssHealthCheckUrl := fmt.Sprintf("%s/%s", strings.Trim(baseURL, "/"), "api/v1/healthcheck")
 
-	isHealthy := checkJSONResponse(ssHealthCheckUrl)
+	isHealthy, err := checkJSONResponse(ssHealthCheckUrl)
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] checking server health check url: %v", err)
+	}
+
 	if isHealthy {
 		return "", nil
-	} else {
-		isHealthy := checkJSONResponse(platformHelthCheckUrl)
-		if isHealthy {
+	}
 
-			accessToken, found := s.getCacheAccessToken(baseURL)
-			if !found {
-				requestData := url.Values{}
-				requestData.Set("grant_type", "client_credentials")
-				requestData.Set("client_id", s.Credentials.Username)
-				requestData.Set("client_secret", s.Credentials.Password)
-				requestData.Set("scope", "xpmheadless")
+	isHealthy, err = checkJSONResponse(platformHelthCheckUrl)
+	if err != nil {
+		return "", fmt.Errorf("[ERROR] checking platform server health check url: %v", err)
+	}
 
-				req, err := http.NewRequest("POST", fmt.Sprintf("%s/%s", strings.Trim(baseURL, "/"), "identity/api/oauth2/token/xpmplatform"), bytes.NewBufferString(requestData.Encode()))
-				if err != nil {
-					log.Print("Error creating HTTP request:", err)
-					return "", err
-				}
+	if isHealthy {
+		accessToken, found := s.getCacheAccessToken(baseURL)
+		if !found {
+			requestData := url.Values{}
+			requestData.Set("grant_type", "client_credentials")
+			requestData.Set("client_id", s.Credentials.Username)
+			requestData.Set("client_secret", s.Credentials.Password)
+			requestData.Set("scope", "xpmheadless")
 
-				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-				data, _, err := handleResponse((&http.Client{}).Do(req))
-				if err != nil {
-					log.Print("[ERROR] get token response error:", err)
-					return "", err
-				}
-
-				var tokenjsonResponse OAuthTokens
-				if err = json.Unmarshal(data, &tokenjsonResponse); err != nil {
-					log.Print("[ERROR] parsing get token response:", err)
-					return "", err
-				}
-				accessToken = tokenjsonResponse.AccessToken
-
-				if err = s.setCacheAccessToken(tokenjsonResponse.AccessToken, tokenjsonResponse.ExpiresIn, baseURL); err != nil {
-					log.Print("[ERROR] caching access token:", err)
-					return "", err
-				}
-			}
-
-			req, err := http.NewRequest("GET", fmt.Sprintf("%s/%s", strings.Trim(baseURL, "/"), "vaultbroker/api/vaults"), bytes.NewBuffer([]byte{}))
+			req, err := http.NewRequest("POST", fmt.Sprintf("%s/%s", strings.Trim(baseURL, "/"), "identity/api/oauth2/token/xpmplatform"), bytes.NewBufferString(requestData.Encode()))
 			if err != nil {
 				log.Print("Error creating HTTP request:", err)
 				return "", err
 			}
-			req.Header.Add("Authorization", "Bearer "+accessToken)
+
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 			data, _, err := handleResponse((&http.Client{}).Do(req))
 			if err != nil {
-				log.Print("[ERROR] get vaults response error:", err)
+				log.Print("[ERROR] get token response error:", err)
 				return "", err
 			}
 
-			var vaultJsonResponse VaultsResponseModel
-			if err = json.Unmarshal(data, &vaultJsonResponse); err != nil {
-				log.Print("[ERROR] parsing vaults response:", err)
+			var tokenjsonResponse OAuthTokens
+			if err = json.Unmarshal(data, &tokenjsonResponse); err != nil {
+				log.Print("[ERROR] parsing get token response:", err)
 				return "", err
 			}
+			accessToken = tokenjsonResponse.AccessToken
 
-			var vaultURL string
-			for _, vault := range vaultJsonResponse.Vaults {
-				if vault.IsDefault && vault.IsActive {
-					vaultURL = vault.Connection.Url
-					break
-				}
+			if err = s.setCacheAccessToken(tokenjsonResponse.AccessToken, tokenjsonResponse.ExpiresIn, baseURL); err != nil {
+				log.Print("[ERROR] caching access token:", err)
+				return "", err
 			}
-			if vaultURL != "" {
-				s.ServerURL = vaultURL
-			} else {
-				return "", fmt.Errorf("no configured vault found")
-			}
-
-			return accessToken, nil
 		}
+
+		req, err := http.NewRequest("GET", fmt.Sprintf("%s/%s", strings.Trim(baseURL, "/"), "vaultbroker/api/vaults"), bytes.NewBuffer([]byte{}))
+		if err != nil {
+			log.Print("Error creating HTTP request:", err)
+			return "", err
+		}
+		req.Header.Add("Authorization", "Bearer "+accessToken)
+
+		data, _, err := handleResponse((&http.Client{}).Do(req))
+		if err != nil {
+			log.Print("[ERROR] get vaults response error:", err)
+			return "", err
+		}
+
+		var vaultJsonResponse VaultsResponseModel
+		if err = json.Unmarshal(data, &vaultJsonResponse); err != nil {
+			log.Print("[ERROR] parsing vaults response:", err)
+			return "", err
+		}
+
+		var vaultURL string
+		for _, vault := range vaultJsonResponse.Vaults {
+			if vault.IsDefault && vault.IsActive {
+				vaultURL = vault.Connection.Url
+				break
+			}
+		}
+		if vaultURL != "" {
+			s.ServerURL = vaultURL
+		} else {
+			return "", fmt.Errorf("no configured vault found")
+		}
+
+		return accessToken, nil
 	}
-	return "", fmt.Errorf("invalid URL")
+
+	return "", fmt.Errorf("url check from platform health check came back as false; this is a fallback")
 }
 
-func checkJSONResponse(url string) bool {
+func checkJSONResponse(url string) (bool, error) {
 	response, err := http.Get(url)
 	if err != nil {
 		log.Println("Error making GET request:", err)
-		return false
+		return false, err
 	}
 	defer response.Body.Close()
 
-	body, err := ioutil.ReadAll(response.Body)
+	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		log.Println("Error reading response body:", err)
-		return false
+		return false, err
 	}
 
 	var jsonResponse Response
 	err = json.Unmarshal(body, &jsonResponse)
 	if err == nil {
-		return jsonResponse.Healthy
-	} else {
-		return strings.Contains(string(body), "Healthy")
+		return jsonResponse.Healthy, nil
 	}
+
+	if strings.Contains(string(body), "Healthy") {
+		return true, nil
+	}
+
+	return false, fmt.Errorf("unexpected response from server: %s", string(body))
 }
 
 type Response struct {
